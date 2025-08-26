@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>NCR Ride Bookings — Interactive Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-brand">NCR Dashboard</div>
+    <ul class="nav-links">
+      <li><a href="#" data-section="line-section" class="active">Bookings per Day</a></li>
+      <li><a href="#" data-section="bar-section">Top 10 Barangays</a></li>
+      <li><a href="#" data-section="pie-section">Booking Types</a></li>
+      <li><a href="#" data-section="table-section">Data Preview</a></li>
+    </ul>
+  </nav>
+
+  <header>
+    <div class="container">
+      <h1>NCR Ride Bookings — Dashboard</h1>
+      <p class="subtitle">Interactive visualization of booking data. Use filters to explore insights.</p>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="card filter-section">
+      <h2>Filters</h2>
+      <div class="controls">
+        <div class="control-group">
+          <label for="date-from">From</label>
+          <input id="date-from" type="date">
+        </div>
+        <div class="control-group">
+          <label for="date-to">To</label>
+          <input id="date-to" type="date">
+        </div>
+        <div class="control-group">
+          <label for="barangay-filter">Barangay</label>
+          <select id="barangay-filter">
+            <option value="__all__">All</option>
+          </select>
+        </div>
+        <div class="button-group">
+          <button id="apply-filter" class="btn primary">Apply</button>
+          <button id="reset-filter" class="btn secondary">Reset</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="line-section" class="card dashboard-section">
+      <h3>Bookings per Day</h3>
+      <canvas id="lineChart"></canvas>
+    </section>
+
+    <section id="bar-section" class="card dashboard-section hidden">
+      <h3>Top 10 Barangays</h3>
+      <canvas id="barChart"></canvas>
+    </section>
+
+    <section id="pie-section" class="card dashboard-section hidden">
+      <h3>Booking Types</h3>
+      <canvas id="pieChart"></canvas>
+    </section>
+
+    <section id="table-section" class="card dashboard-section hidden">
+      <h3>Data Preview</h3>
+      <div id="table-container"></div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      &copy; 2025 NCR Dashboard | Designed with HTML, CSS, and JavaScript
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+  <script>
+    const navLinks = document.querySelectorAll('.nav-links a');
+    const sections = document.querySelectorAll('.dashboard-section');
+
+    navLinks.forEach(link => {
+      link.addEventListener('click', e => {
+        e.preventDefault();
+        navLinks.forEach(l => l.classList.remove('active'));
+        link.classList.add('active');
+        const sectionId = link.getAttribute('data-section');
+        sections.forEach(sec => {
+          sec.classList.toggle('hidden', sec.id !== sectionId);
+        });
+      });
+    });
+  </script>
+</body>
+</html>
