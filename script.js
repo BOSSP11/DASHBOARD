@@ -1,159 +1,222 @@
-async function loadCSV(filePath) {
-  const response = await fetch(filePath);
-  const text = await response.text();
-  const [headerLine, ...lines] = text.trim().split("\n");
-  const headers = headerLine.split(",");
-  return lines.map(line => {
-    const values = line.split(",");
-    let row = {};
-    headers.forEach((h, i) => row[h.trim()] = values[i] ? values[i].trim() : "");
-    return row;
-  });
-}
-
-function formatDate(dateStr) {
-  const d = new Date(dateStr);
-  return !isNaN(d) ? d.toISOString().split("T")[0] : null;
-}
-
 let rawData = [];
-let lineChart, barChart, pieChart;
+let charts = {};
 
-document.addEventListener("DOMContentLoaded", async () => {
-  rawData = await loadCSV("ncr_ride_bookings.csv");
-  initDashboard(rawData);
+// Load CSV
+Papa.parse("ncr_ride_bookings.csv", {
+  download: true,
+  header: true,
+  dynamicTyping: true,
+  complete: function (results) {
+    rawData = results.data;
+    populateVehicleDropdown();
+    populatePlaceDropdown();
+    updateDashboard();
+  }
 });
 
-function initDashboard(data) {
-  const columns = Object.keys(data[0]);
-  const dateCol = columns.find(c => c.toLowerCase().includes("date")) || columns[0];
-  const barangayCol = columns.find(c => c.toLowerCase().includes("barangay") || c.toLowerCase().includes("location")) || columns[1];
-  const typeCol = columns.find(c => c.toLowerCase().includes("type")) || columns[2];
-
-  const barangays = [...new Set(data.map(d => d[barangayCol]))].sort();
-  const barangaySelect = document.getElementById("barangay-filter");
-  barangays.forEach(b => {
+// Populate vehicle dropdown
+function populateVehicleDropdown() {
+  const vehicleFilter = document.getElementById("vehicleFilter");
+  const vehicles = [...new Set(rawData.map(d => d["Vehicle Type"]).filter(Boolean))];
+  vehicles.forEach(v => {
     const opt = document.createElement("option");
-    opt.value = b;
-    opt.textContent = b;
-    barangaySelect.appendChild(opt);
+    opt.value = v;
+    opt.textContent = v;
+    vehicleFilter.appendChild(opt);
   });
+}
 
-  document.getElementById("apply-filter").onclick = () => {
-    const from = document.getElementById("date-from").value;
-    const to = document.getElementById("date-to").value;
-    const brgy = barangaySelect.value;
-    let filtered = data;
-    if (from) filtered = filtered.filter(d => formatDate(d[dateCol]) >= from);
-    if (to) filtered = filtered.filter(d => formatDate(d[dateCol]) <= to);
-    if (brgy !== "__all__") filtered = filtered.filter(d => d[barangayCol] === brgy);
-    updateCharts(filtered, dateCol, barangayCol, typeCol);
-    renderTable(filtered);
-  };
+// Populate place dropdown
+function populatePlaceDropdown() {
+  const placeFilter = document.getElementById("placeFilter");
+  const places = [...new Set(rawData.map(d => d["Pickup Location"]).filter(Boolean))];
+  places.forEach(p => {
+    const opt = document.createElement("option");
+    opt.value = p;
+    opt.textContent = p;
+    placeFilter.appendChild(opt);
+  });
+}
 
-  document.getElementById("reset-filter").onclick = () => {
-    document.getElementById("date-from").value = "";
-    document.getElementById("date-to").value = "";
-    barangaySelect.value = "__all__";
-    updateCharts(data, dateCol, barangayCol, typeCol);
-    renderTable(data);
-  };
+// Apply filters
+function getFilteredData() {
+  const start = document.getElementById("startDate").value;
+  const end = document.getElementById("endDate").value;
+  const vehicle = document.getElementById("vehicleFilter").value;
+  const place = document.getElementById("placeFilter").value;
 
-  updateCharts(data, dateCol, barangayCol, typeCol);
+  return rawData.filter(d => {
+    if (!d.Date) return false;
+
+    if (start && new Date(d.Date) < new Date(start)) return false;
+    if (end && new Date(d.Date) > new Date(end)) return false;
+
+    if (vehicle !== "all" && d["Vehicle Type"] !== vehicle) return false;
+    if (place !== "all" && d["Pickup Location"] !== place) return false;
+
+    return true;
+  });
+}
+
+// Update dashboard
+function updateDashboard() {
+  const data = getFilteredData();
+
+  // KPIs
+  document.getElementById("kpi-total").textContent = data.length;
+  document.getElementById("kpi-completed").textContent = data.filter(d => d["Booking Status"] === "Completed").length;
+  document.getElementById("kpi-cancelled").textContent = data.filter(d => d["Booking Status"].includes("Cancelled") || d["Booking Status"] === "No Driver Found").length;
+  
+  const avgValue = data.reduce((a,b) => a+(+b["Booking Value"]||0),0)/ (data.length||1);
+  document.getElementById("kpi-avg-value").textContent = avgValue.toFixed(2);
+  
+  const avgRating = data.reduce((a,b) => a+(+b["Driver Ratings"]||0),0)/ (data.length||1);
+  document.getElementById("kpi-avg-ratings").textContent = avgRating.toFixed(2);
+
+  const revenue = data.reduce((a,b)=>a+(+b["Booking Value"]||0),0);
+  document.getElementById("kpi-revenue").textContent = "₱" + revenue.toLocaleString();
+
+  // Top pickup/dropoff
+  const pickupCounts = countBy(data,"Pickup Location");
+  const dropoffCounts = countBy(data,"Dropoff Location");
+
+  const topPickup = Object.entries(pickupCounts).sort((a,b)=>b[1]-a[1])[0];
+  const topDrop = Object.entries(dropoffCounts).sort((a,b)=>b[1]-a[1])[0];
+  document.getElementById("kpi-top-pickup").textContent = topPickup ? topPickup[0] : "—";
+  document.getElementById("kpi-top-dropoff").textContent = topDrop ? topDrop[0] : "—";
+
+  // Charts
+  renderCharts(data, pickupCounts, dropoffCounts);
+
+  // Table
   renderTable(data);
 }
 
-function updateCharts(data, dateCol, barangayCol, typeCol) {
-  const ctxLine = document.getElementById("lineChart").getContext("2d");
-  const ctxBar = document.getElementById("barChart").getContext("2d");
-  const ctxPie = document.getElementById("pieChart").getContext("2d");
+// Count by field helper
+function countBy(data, field) {
+  return data.reduce((acc, row) => {
+    let key = row[field];
+    if (!key) return acc;
+    acc[key] = (acc[key]||0)+1;
+    return acc;
+  }, {});
+}
 
-  let dailyCounts = {};
+// Render charts
+function renderCharts(data, pickupCounts, dropoffCounts) {
+  Object.values(charts).forEach(c => c.destroy());
+
+  // Bookings over time
+  const byDate = {};
   data.forEach(d => {
-    const day = formatDate(d[dateCol]);
-    if (day) dailyCounts[day] = (dailyCounts[day] || 0) + 1;
+    if (!d.Date) return;
+    byDate[d.Date] = (byDate[d.Date]||0)+1;
   });
-  const dates = Object.keys(dailyCounts).sort();
-  const dailyVals = dates.map(d => dailyCounts[d]);
-
-  let barangayCounts = {};
-  data.forEach(d => {
-    const b = d[barangayCol] || "Unknown";
-    barangayCounts[b] = (barangayCounts[b] || 0) + 1;
-  });
-  let topBarangays = Object.entries(barangayCounts).sort((a, b) => b[1] - a[1]).slice(0, 10);
-
-  let typeCounts = {};
-  data.forEach(d => {
-    const t = d[typeCol] || "Unknown";
-    typeCounts[t] = (typeCounts[t] || 0) + 1;
-  });
-
-  if (lineChart) lineChart.destroy();
-  if (barChart) barChart.destroy();
-  if (pieChart) pieChart.destroy();
-
-  lineChart = new Chart(ctxLine, {
+  charts.time = new Chart(document.getElementById("chartTime"), {
     type: "line",
-    data: {
-      labels: dates,
-      datasets: [{
-        label: "Bookings",
-        data: dailyVals,
-        borderColor: "#2563eb",
-        backgroundColor: "rgba(37,99,235,0.1)",
-        fill: true,
-        tension: 0.4
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: false }, tooltip: { mode: "index", intersect: false } },
-      scales: { x: { ticks: { color: "#1e3a8a" } }, y: { beginAtZero: true, ticks: { color: "#1e3a8a" } } }
-    }
+    data: {labels:Object.keys(byDate),datasets:[{label:"Bookings",data:Object.values(byDate),borderColor:"#2563eb"}]}
   });
 
-  barChart = new Chart(ctxBar, {
-    type: "bar",
-    data: {
-      labels: topBarangays.map(x => x[0]),
-      datasets: [{
-        label: "Bookings",
-        data: topBarangays.map(x => x[1]),
-        backgroundColor: "#1e40af"
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: false }, tooltip: { mode: "index", intersect: false } },
-      scales: { x: { ticks: { color: "#1e3a8a" } }, y: { beginAtZero: true, ticks: { color: "#1e3a8a" } } }
-    }
+  // Status distribution
+  const byStatus = {};
+  data.forEach(d => { if(d["Booking Status"]) byStatus[d["Booking Status"]] = (byStatus[d["Booking Status"]]||0)+1; });
+  charts.status = new Chart(document.getElementById("chartStatus"), {
+    type:"doughnut",
+    data:{labels:Object.keys(byStatus),datasets:[{data:Object.values(byStatus),backgroundColor:["#2563eb","#f43f5e","#facc15","#10b981"]}]}
   });
 
-  pieChart = new Chart(ctxPie, {
-    type: "pie",
-    data: {
-      labels: Object.keys(typeCounts),
-      datasets: [{
-        data: Object.values(typeCounts),
-        backgroundColor: ["#1e3a8a", "#2563eb", "#3b82f6", "#60a5fa", "#93c5fd"]
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: { legend: { position: "bottom" }, tooltip: { callbacks: { label: c => c.label + ": " + c.parsed } } }
-    }
+  // Vehicle usage
+  const byVehicle = {};
+  data.forEach(d => { if(d["Vehicle Type"]) byVehicle[d["Vehicle Type"]] = (byVehicle[d["Vehicle Type"]]||0)+1; });
+  charts.vehicle = new Chart(document.getElementById("chartVehicle"), {
+    type:"bar",
+    data:{labels:Object.keys(byVehicle),datasets:[{label:"Rides",data:Object.values(byVehicle),backgroundColor:"#10b981"}]}
+  });
+
+  // Payment methods
+  const byPay = {};
+  data.forEach(d => { if(d["Payment Method"]) byPay[d["Payment Method"]] = (byPay[d["Payment Method"]]||0)+1; });
+  charts.payment = new Chart(document.getElementById("chartPayment"), {
+    type:"pie",
+    data:{labels:Object.keys(byPay),datasets:[{data:Object.values(byPay),backgroundColor:["#3b82f6","#f59e0b","#ef4444","#22c55e"]}]}
+  });
+
+  // Scatter Distance vs Value
+  const scatter = data.filter(d=>d["Ride Distance"]&&d["Booking Value"])
+    .map(d=>({x:d["Ride Distance"],y:d["Booking Value"]}));
+  charts.scatter = new Chart(document.getElementById("chartScatter"), {
+    type:"scatter",
+    data:{datasets:[{label:"Ride",data:scatter,backgroundColor:"#2563eb"}]}
+  });
+
+  // Top pickup/dropoff
+  updateTopLocations("chartTopPickup", pickupCounts);
+  updateTopLocations("chartTopDropoff", dropoffCounts);
+
+  // Hourly booking trends
+  updateHourlyChart(data);
+
+  // Ratings distribution
+  updateRatingsChart(data);
+}
+
+// Top location charts
+function updateTopLocations(canvasId, counts) {
+  let sorted = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  let labels = sorted.map(d => d[0]);
+  let values = sorted.map(d => d[1]);
+  charts[canvasId] = new Chart(document.getElementById(canvasId), {
+    type:"bar",
+    data:{labels,datasets:[{label:"Rides",data:values,backgroundColor:"#3b82f6"}]},
+    options:{plugins:{legend:{display:false}}}
   });
 }
 
+// Hourly booking trends
+function updateHourlyChart(data) {
+  let hours = Array(24).fill(0);
+  data.forEach(r => {
+    let d = new Date(r["Booking Time"]);
+    if (!isNaN(d)) hours[d.getHours()]++;
+  });
+  charts.hourly = new Chart(document.getElementById("chartHourly"), {
+    type:"line",
+    data:{labels:hours.map((_,i)=>i+":00"),datasets:[{label:"Bookings",data:hours,borderColor:"#22c55e"}]}
+  });
+}
+
+// Ratings distribution
+function updateRatingsChart(data) {
+  let counts = {};
+  data.forEach(r => {
+    let rating = Math.round(r["Driver Ratings"]);
+    if (rating) counts[rating] = (counts[rating]||0)+1;
+  });
+  let labels = Object.keys(counts).sort((a,b)=>a-b);
+  let values = labels.map(k => counts[k]);
+  charts.ratingsDist = new Chart(document.getElementById("chartRatingsDist"), {
+    type:"bar",
+    data:{labels,datasets:[{label:"Count",data:values,backgroundColor:"#f59e0b"}]},
+    options:{plugins:{legend:{display:false}}}
+  });
+}
+
+// Render table
 function renderTable(data) {
-  const container = document.getElementById("table-container");
-  if (!data.length) { container.innerHTML = "<p>No data available</p>"; return; }
-  const cols = Object.keys(data[0]);
-  let html = "<table><thead><tr>" + cols.map(c => "<th>" + c + "</th>").join("") + "</tr></thead><tbody>";
-  data.slice(0, 50).forEach(row => {
-    html += "<tr>" + cols.map(c => "<td>" + row[c] + "</td>").join("") + "</tr>";
+  const table = document.getElementById("dataTable");
+  const head = table.querySelector("thead");
+  const body = table.querySelector("tbody");
+  head.innerHTML = "";
+  body.innerHTML = "";
+  if (data.length === 0) return;
+  const headers = Object.keys(data[0]);
+  head.innerHTML = "<tr>"+headers.map(h=>`<th>${h}</th>`).join("")+"</tr>";
+  data.slice(0,20).forEach(row=>{
+    body.innerHTML += "<tr>"+headers.map(h=>`<td>${row[h]||""}</td>`).join("")+"</tr>";
   });
-  html += "</tbody></table>";
-  container.innerHTML = html;
 }
+
+// Event listeners
+["startDate","endDate","vehicleFilter","placeFilter"].forEach(id=>{
+  document.getElementById(id).addEventListener("change", updateDashboard);
+});
